@@ -3,22 +3,29 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import cv2
 
-from utils import apply_disposable_camera_filter
+from utils import apply_channel_lut, apply_disposable_camera_filter
 from utils import (
                    apply_channel_lut,
                    apply_point_lut,
-                   adjust_highlights_cursor,
                    adjust_highlights,
                    adjust_shadows,
                    adjust_midtones,
                    adjust_blacks,
-                   adjust_whites
+                   adjust_whites,
+                   adjust_tint,
+                   adjust_temp
 )
 
+
 if __name__ == "__main__":
-    img = Image.open("./TEST_IMGS/IMG_6633.jpg")
+    img = Image.open("./TEST_IMGS/IMG_7363.jpg")
     out = apply_disposable_camera_filter(img)
     out.show()
+
+    arr = np.asarray(img).astype(np.float32) / 255.0
+    out_tint = adjust_temp(arr, 0.6)
+    tinted_img = Image.fromarray((out_tint * 255).astype(np.uint8))
+    tinted_img.show()
 
     # im = Image.open("./TEST_IMGS/IMG_2164.jpg").convert("RGBA")
     

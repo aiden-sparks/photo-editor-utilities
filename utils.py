@@ -196,87 +196,6 @@ def adjust_whites(img, value):
     return (result * 255).astype(np.uint8)
 
 
-def adjust_highlights_cursor(img, val, show_preview=False):
-    """
-    Adjust image brightness with luminance-based weighting.
-    Highlights affected most, midtones slightly, shadows less, blacks hardly at all.
-
-    Args:
-    - img: PIL.Image — input image
-    - val: float — [-1.0, 1.0]; positive brightens, negative darkens
-    - show_preview: bool — if True, shows a preview window highlighting affected pixels
-
-    Returns: PIL.Image in the original mode
-    """
-    original_mode = img.mode
-    work = img.convert("RGBA")
-
-    # Normalize to 0..1 for computation
-    arr = np.array(work).astype(np.float32) / 255.0
-    rgb = arr[..., :3]
-    alpha = arr[..., 3:]
-
-    # Perceptual luminance (sRGB)
-    luminance = (
-        rgb[..., 0] * 0.2126 + rgb[..., 1] * 0.7152 + rgb[..., 2] * 0.0722
-    )
-
-    # Create luminance-based weight mask that affects entire image
-    # Highlights (0.8-1.0): full effect
-    # Midtones (0.4-0.8): moderate effect  
-    # Shadows (0.2-0.4): light effect
-    # Blacks (0.0-0.2): minimal effect
-    weight = np.zeros_like(luminance)
-    
-    # Blacks: minimal effect (0.0-0.2)
-    black_mask = luminance < 0.2
-    weight[black_mask] = luminance[black_mask] * 0.1  # 0-0.02 effect
-    
-    # Shadows: light effect (0.2-0.4)
-    shadow_mask = (luminance >= 0.2) & (luminance < 0.4)
-    weight[shadow_mask] = 0.02 + (luminance[shadow_mask] - 0.2) * 0.15  # 0.02-0.05 effect
-    
-    # Midtones: moderate effect (0.4-0.8)
-    midtone_mask = (luminance >= 0.4) & (luminance < 0.8)
-    weight[midtone_mask] = 0.05 + (luminance[midtone_mask] - 0.4) * 0.3  # 0.05-0.17 effect
-    
-    # Highlights: full effect (0.8-1.0)
-    highlight_mask = luminance >= 0.8
-    weight[highlight_mask] = 0.17 + (luminance[highlight_mask] - 0.8) * 0.415  # 0.17-1.0 effect
-    
-    weight = weight[..., None]
-
-    # Show preview if requested
-    if show_preview:
-        # Create preview image showing affected pixels
-        preview_arr = np.array(work).astype(np.float32)
-        
-        # Show the weight mask as a grayscale overlay
-        preview_arr[..., :3] = preview_arr[..., :3] * (1 - weight * 0.7) + weight * 255 * 0.3
-        
-        # Create preview image
-        preview_img = Image.fromarray(preview_arr.astype(np.uint8), mode="RGBA")
-        preview_img.show(title=f"Luminance Weight Mask Preview (val={val:.2f})")
-
-    v = float(max(-1.0, min(1.0, val)))
-    if v > 0.0:
-        # Brighten with luminance-based weighting
-        # For val=1.0: 50% luminance pixels get ~15% brighter, 80% luminance pixels get ~83% brighter
-        adjusted_rgb = rgb + weight * v * (1.0 - rgb) * 0.8
-    elif v < 0.0:
-        s = -v
-        # Darken with luminance-based weighting
-        # For val=-1.0: 50% luminance pixels get ~15% darker, 80% luminance pixels get ~83% darker
-        adjusted_rgb = rgb * (1.0 - weight * s * 0.8)
-    else:
-        return img
-
-    out_rgb = np.clip(adjusted_rgb, 0.0, 1.0)
-    out_arr = np.concatenate([out_rgb, alpha], axis=-1)
-    out = Image.fromarray((out_arr * 255.0).astype(np.uint8), mode="RGBA")
-    return out.convert(original_mode)
-
-
 def apply_point_lut(img, x, y):
     work = img.convert("RGBA")
 
@@ -311,7 +230,55 @@ def apply_channel_lut(img, x, y, channel):
     return merged_img
 
 
-def apply_disposable_camera_filter(img, *, grain_strength=0.035, vignette_strength=0.35, light_leak_strength=0.08):
+def adjust_tint(image, tint_value, scale=0.15):
+    """
+    Adjusts green-magenta tint in an image.
+    
+    Parameters:
+        image: numpy array (H, W, 3), float32 in [0,1]
+        tint_value: float in [-1.0, 1.0], where
+                    -1.0 = max green, +1.0 = max magenta
+        scale: strength of the effect (default=0.15)
+    """
+    # derive k from slider value
+    k = tint_value * scale
+    
+    # build per-channel multipliers
+    r_mult = 1 + k
+    g_mult = 1 - 2 * k
+    b_mult = 1 + k
+    
+    # apply
+    out = np.empty_like(image)
+    out[..., 0] = np.clip(image[..., 0] * r_mult, 0, 1)
+    out[..., 1] = np.clip(image[..., 1] * g_mult, 0, 1)
+    out[..., 2] = np.clip(image[..., 2] * b_mult, 0, 1)
+    
+    return out
+
+
+def adjust_temp(image, temp_value, scale=0.15):
+    """
+    
+    """
+    # derive k from slider value
+    k = temp_value * scale
+    
+    # build per-channel multipliers
+    r_mult = 1 + k
+    g_mult = 1 + k
+    b_mult = 1 - 2 * k
+    
+    # apply
+    out = np.empty_like(image)
+    out[..., 0] = np.clip(image[..., 0] * r_mult, 0, 1)
+    out[..., 1] = np.clip(image[..., 1] * g_mult, 0, 1)
+    out[..., 2] = np.clip(image[..., 2] * b_mult, 0, 1)
+    
+    return out
+
+
+def apply_disposable_camera_filter(img, *, grain_strength=0.08, vignette_strength=0.35, light_leak_strength=0.08):
     """
     Return a new image styled like a disposable camera shot.
 
@@ -324,15 +291,15 @@ def apply_disposable_camera_filter(img, *, grain_strength=0.035, vignette_streng
     original_mode = img.mode
     work = img.convert("RGBA")
 
-    # 1) Subtle color curve shifts to lift blacks, warm tones, reduce blue in shadows
+    # 1) Color curve shifts with green tint - boost green channel, reduce red and blue
     def _build_lut(x_points, y_points):
         x = np.asarray(x_points, dtype=np.float32)
         y = np.asarray(y_points, dtype=np.float32)
         return np.interp(np.arange(256), x, y).astype(np.uint8)
 
-    r_lut = _build_lut([0, 235], [10, 255])
-    g_lut = _build_lut([0, 245], [5, 255])
-    b_lut = _build_lut([0, 255], [0, 255])
+    r_lut = _build_lut([0, 235], [5, 245])  # Reduced red slightly
+    g_lut = _build_lut([0, 245], [15, 255])  # Boosted green more
+    b_lut = _build_lut([0, 255], [0, 240])  # Reduced blue slightly
 
     r, g, b, a = work.split()
     r = r.point(r_lut)
@@ -340,16 +307,57 @@ def apply_disposable_camera_filter(img, *, grain_strength=0.035, vignette_streng
     b = b.point(b_lut)
     work = Image.merge("RGBA", [r, g, b, a])
 
-    # 2) Slightly reduce contrast for faded look and bump saturation up
+    # 2) Add green tint overlay
+    arr = np.array(work).astype(np.float32)
+    green_tint = np.array([0.0, 0.15, 0.0], dtype=np.float32)  # Green tint
+    arr[..., :3] = np.clip(arr[..., :3] + green_tint * 255 * 0.1, 0, 255)
+    work = Image.fromarray(arr.astype(np.uint8), mode="RGBA")
+
+    # 3) Slightly reduce contrast for faded look and bump saturation up
     work = ImageEnhance.Contrast(work).enhance(0.93)
     work = ImageEnhance.Color(work).enhance(1.02)
     work = ImageEnhance.Brightness(work).enhance(1.00)
+
+    # 4) Brighten highlights using luminance-based weighting
+    arr = np.array(work).astype(np.float32) / 255.0
+    rgb = arr[..., :3]
+    alpha = arr[..., 3:]
+    
+    # Calculate perceptual luminance
+    luminance = rgb[..., 0] * 0.2126 + rgb[..., 1] * 0.7152 + rgb[..., 2] * 0.0722
+    
+    # Create weight mask that emphasizes highlights
+    # Highlights (0.7-1.0): full effect, Midtones (0.4-0.7): moderate effect, Shadows (0.0-0.4): minimal effect
+    weight = np.zeros_like(luminance)
+    
+    # Shadows: minimal effect (0.0-0.4)
+    shadow_mask = luminance < 0.4
+    weight[shadow_mask] = luminance[shadow_mask] * 0.1
+    
+    # Midtones: moderate effect (0.4-0.7)
+    midtone_mask = (luminance >= 0.4) & (luminance < 0.7)
+    weight[midtone_mask] = 0.04 + (luminance[midtone_mask] - 0.4) * 0.2
+    
+    # Highlights: full effect (0.7-1.0)
+    highlight_mask = luminance >= 0.7
+    weight[highlight_mask] = 0.1 + (luminance[highlight_mask] - 0.7) * 0.3
+    
+    weight = weight[..., None]
+    
+    # Apply highlights brightening
+    highlight_boost = 0.25  # Amount to brighten highlights
+    adjusted_rgb = rgb + weight * highlight_boost * (1.0 - rgb) * 0.6
+    adjusted_rgb = np.clip(adjusted_rgb, 0.0, 1.0)
+    
+    # Reconstruct the image
+    out_arr = np.concatenate([adjusted_rgb, alpha], axis=-1)
+    work = Image.fromarray((out_arr * 255.0).astype(np.uint8), mode="RGBA")
 
     # Convert to numpy for spatial effects
     arr = np.array(work).astype(np.float32)
     h, w = arr.shape[0], arr.shape[1]
 
-    # 3) Vignette (radial falloff)
+    # 5) Vignette (radial falloff)
     if vignette_strength > 0:
         yy, xx = np.mgrid[0:h, 0:w]
         cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
@@ -361,12 +369,12 @@ def apply_disposable_camera_filter(img, *, grain_strength=0.035, vignette_streng
         vignette = vignette[..., None]
         arr[..., :3] = np.clip(arr[..., :3] * vignette, 0, 255)
 
-    # 4) Film grain (additive, gaussian noise)
+    # 6) Film grain (additive, gaussian noise)
     if grain_strength > 0:
         noise = np.random.normal(loc=0.0, scale=255.0 * grain_strength, size=(h, w, 1)).astype(np.float32)
         arr[..., :3] = np.clip(arr[..., :3] + noise, 0, 255)
 
-    # 5) Subtle warm light leak from one edge
+    # 7) Subtle warm light leak from one edge
     if light_leak_strength > 0:
         # Left-edge gradient leak (H, W, 1)
         x = np.linspace(1.0, 0.0, w, dtype=np.float32)
