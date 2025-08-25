@@ -1,8 +1,21 @@
-"""Utility functions for editing images using Pillow"""
+"""Utility functions for editing images using Pillow and opencv"""
 
 import numpy as np
 from PIL import Image, ImageEnhance
 import cv2
+
+
+# Define Lightroom-style HSL target hues (OpenCV hue is 0-179)
+COLOR_HUES = {
+    "red": 0,
+    "orange": 15,
+    "yellow": 30,
+    "green": 60,
+    "aqua": 90,
+    "blue": 120,
+    "purple": 150,
+    "magenta": 170
+}
 
 
 def adjust_contrast(img, val):
@@ -20,6 +33,170 @@ def adjust_brightness(img, val):
 
 def adjust_sharpness(img, val):
     return ImageEnhance.Sharpness(img).enhance(val)
+
+
+def _color_mask(h, target_hue, width=20):
+    """
+    Compute weight mask for how close each pixel hue is to target hue.
+    Uses a triangular falloff so that closer hues get stronger effect.
+    
+    h: hue channel (0-179 OpenCV HSV)
+    target_hue: target hue center
+    width: half-width of influence band
+    """
+    # Handle circular hue distance
+    dist = np.abs(h - target_hue)
+    dist = np.minimum(dist, 180 - dist)  # wraparound distance
+    weight = np.clip(1 - dist / width, 0, 1)
+    return weight
+
+
+def adjust_color_hue(image_path, color, factor):
+    """
+    Adjust hue for pixels in the selected color band.
+    factor: hue shift in degrees (-30 to +30 is typical).
+    """
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
+
+    h, s, v = cv2.split(hsv)
+
+    target_hue = COLOR_HUES[color]
+    weight = _color_mask(h, target_hue, width=20)
+
+    # Apply hue shift scaled by weight
+    h = (h + weight * factor / 2) % 180  # OpenCV hue is 0-179, factor/2 ≈ degrees
+
+    hsv_out = cv2.merge([h, s, v]).astype(np.uint8)
+    out = cv2.cvtColor(hsv_out, cv2.COLOR_HSV2RGB)
+    return Image.fromarray(out)
+
+
+def adjust_color_saturation(image_path, color, factor):
+    """
+    Adjust saturation for pixels in the selected color band.
+    factor: scale multiplier (e.g. -0.5 to 1.0).
+    """
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
+
+    h, s, v = cv2.split(hsv)
+
+    target_hue = COLOR_HUES[color]
+    weight = _color_mask(h, target_hue, width=20)
+
+    # Scale saturation relative to weight
+    s = np.clip(s * (1 + factor * weight), 0, 255)
+
+    hsv_out = cv2.merge([h, s, v]).astype(np.uint8)
+    out = cv2.cvtColor(hsv_out, cv2.COLOR_HSV2RGB)
+    return Image.fromarray(out)
+
+
+def adjust_color_luminance(image_path, color, factor):
+    """
+    Adjust luminance (value/brightness) for selected color band.
+    factor: scale multiplier (e.g. -0.5 to 1.0).
+    """
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
+
+    h, s, v = cv2.split(hsv)
+
+    target_hue = COLOR_HUES[color]
+    weight = _color_mask(h, target_hue, width=20)
+
+    # Adjust brightness/luminance with weighting
+    v = np.clip(v * (1 + factor * weight), 0, 255)
+
+    hsv_out = cv2.merge([h, s, v]).astype(np.uint8)
+    out = cv2.cvtColor(hsv_out, cv2.COLOR_HSV2RGB)
+    return Image.fromarray(out)
+
+
+def adjust_vibrance(image_path, factor, skin_reduction=0.5):
+    """
+    Adjusts the vibrance of an image.
+    
+    Args:
+        image_path (str): Path to the input image.
+        factor (float): Vibrance intensity. 
+                        0.0 = no change
+                        >0 = more vibrant
+                        <0 = less vibrant
+        skin_reduction (float): How much to reduce vibrance effect on skin tones
+                                (0 = full effect, 1 = no effect on skin).
+    
+    Returns:
+        PIL.Image: Vibrance-adjusted image.
+    """
+    # Load image
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    # Convert to HSV
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
+    h, s, v = cv2.split(hsv)
+
+    # Normalize saturation to [0,1]
+    s_norm = s / 255.0
+
+    # Vibrance scaling:
+    # Boost muted colors more (nonlinear based on "lack of saturation")
+    vibrance_boost = (1.0 - s_norm) * factor
+    s_new = s_norm + vibrance_boost * s_norm
+
+    # Detect skin tones (Hue ~ 25°–65° out of 0–179 in OpenCV HSV)
+    skin_mask = ((h >= 10) & (h <= 25))  # OpenCV Hue is 0–179, so scale from degrees
+    # Apply reduced boost in skin regions
+    s_new = np.where(skin_mask,
+                     s_norm + (1 - s_norm) * factor * (1 - skin_reduction) * s_norm,
+                     s_new)
+
+    # Clip and rescale
+    s_new = np.clip(s_new * 255.0, 0, 255).astype(np.float32)
+
+    # Merge channels and convert back
+    hsv_out = cv2.merge([h, s_new, v]).astype(np.uint8)
+    img_out = cv2.cvtColor(hsv_out, cv2.COLOR_HSV2RGB)
+
+    return Image.fromarray(img_out)
+
+
+def adjust_saturation(image_path, factor):
+    """
+    Adjusts the global saturation of an image.
+    
+    Args:
+        image_path (str): Path to the input image.
+        factor (float): Saturation multiplier. 
+                        0.0 = grayscale, 
+                        1.0 = original, 
+                        >1.0 = more saturated.
+    
+    Returns:
+        PIL.Image: Saturation-adjusted image.
+    """
+    # Read image with OpenCV (BGR format)
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    # Convert to HSV (Hue, Saturation, Value)
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
+
+    # Scale the saturation channel
+    h, s, v = cv2.split(hsv)
+    s = np.clip(s * factor, 0, 255)
+
+    # Merge back and convert to RGB
+    hsv = cv2.merge([h, s, v]).astype(np.uint8)
+    img_out = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+
+    return Image.fromarray(img_out)
+
 
 def adjust_highlights(img, value):
     """
@@ -392,3 +569,36 @@ def apply_disposable_camera_filter(img, *, grain_strength=0.08, vignette_strengt
 
     # Return in the original mode
     return out.convert(original_mode)
+
+
+def apply_film_grain(image, amount=0.5):
+    """
+    Apply a film grain effect to an image.
+    
+    Parameters:
+        image (str | np.ndarray | PIL.Image): Path to image, numpy array, or PIL image.
+        amount (float): Grain intensity, between 0 (none) and 1 (strong).
+    
+    Returns:
+        PIL.Image: Image with film grain applied.
+    """
+    # Load if image is a path
+    if isinstance(image, str):
+        img = cv2.imread(image, cv2.IMREAD_COLOR)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    elif isinstance(image, Image.Image):
+        img = np.array(image.convert("RGB"))
+    else:
+        img = image.copy()
+    
+    # Normalize amount (so it's subtle at low values)
+    amount = np.clip(amount, 0.0, 1.0)
+
+    # Generate noise
+    noise = np.random.normal(0, 25 * amount, img.shape).astype(np.float32)
+
+    # Add noise to image
+    noisy_img = img.astype(np.float32) + noise
+    noisy_img = np.clip(noisy_img, 0, 255).astype(np.uint8)
+
+    return Image.fromarray(noisy_img)

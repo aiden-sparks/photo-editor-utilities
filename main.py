@@ -3,7 +3,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import cv2
 
-from utils import apply_channel_lut, apply_disposable_camera_filter
+from utils import apply_disposable_camera_filter
 from utils import (
                    apply_channel_lut,
                    apply_point_lut,
@@ -13,19 +13,32 @@ from utils import (
                    adjust_blacks,
                    adjust_whites,
                    adjust_tint,
-                   adjust_temp
+                   adjust_temp,
+                   adjust_contrast,
+                   adjust_saturation,
+                   adjust_vibrance,
+                   adjust_color_hue,
+                   adjust_color_saturation,
+                   adjust_color_luminance,
+                   apply_film_grain
 )
 
 
 if __name__ == "__main__":
-    img = Image.open("./TEST_IMGS/IMG_7363.jpg")
+    img = Image.open("./TEST_IMGS/IMG_6633.jpg")
     out = apply_disposable_camera_filter(img)
-    out.show()
+    # out.show()
 
-    arr = np.asarray(img).astype(np.float32) / 255.0
-    out_tint = adjust_temp(arr, 0.6)
-    tinted_img = Image.fromarray((out_tint * 255).astype(np.uint8))
-    tinted_img.show()
+    light_grain = apply_film_grain(img, 1)
+    light_grain.show()
+
+    gpt_grain = apply_film_grain(img, 1)
+    gpt_grain.show()
+
+    # arr = np.asarray(img).astype(np.float32) / 255.0
+    # out_tint = adjust_temp(arr, 0.6)
+    # tinted_img = Image.fromarray((out_tint * 255).astype(np.uint8))
+    # tinted_img.show()
 
     # im = Image.open("./TEST_IMGS/IMG_2164.jpg").convert("RGBA")
     
